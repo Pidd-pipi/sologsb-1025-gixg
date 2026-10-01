@@ -17,10 +17,11 @@ import {
   NbToastrService
 } from '@nebular/theme';
 
-type WorkspaceView = 'compose' | 'checks' | 'review' | 'versions';
+type WorkspaceView = 'compose' | 'checks' | 'review' | 'versions' | 'publish';
 type ReviewStatus = 'pending' | 'approved' | 'changes';
 type NoticeStatus = 'draft' | 'in-review' | 'locked';
 type CheckLevel = 'error' | 'warning' | 'info';
+type ReceiptStatus = 'pending' | 'sending' | 'success' | 'failed' | 'stale';
 
 interface LanguageVersion {
   id: string;
@@ -65,6 +66,18 @@ interface VersionSnapshot {
   languages: LanguageVersion[];
   note: string;
   emergency: boolean;
+  receipts: ChannelReceipt[];
+}
+
+interface ChannelReceipt {
+  channel: string;
+  status: ReceiptStatus;
+  attempts: number;
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  failureReason?: string;
+  contentHash: string;
+  languageHashes: Array<{ languageId: string; locale: string; hash: string }>;
 }
 
 interface NoticeDraft {
@@ -117,6 +130,24 @@ interface NoticeTemplate {
 
 const STORAGE_KEY = 'sologsb-1025-emergency-notice-v1';
 
+const CHANNEL_SUCCESS_RATE: Record<string, number> = {
+  '短信': 0.9,
+  '广播': 0.8,
+  '社区大屏': 0.7,
+  '政务新媒体': 0.85,
+  '应急喇叭': 0.75,
+  '网站': 0.9
+};
+
+const CHANNEL_FAILURE_REASON: Record<string, string> = {
+  '短信': '短信网关超时，未收到送达报告',
+  '广播': '广播发射台无应答',
+  '社区大屏': '社区大屏终端离线或信号弱',
+  '政务新媒体': '新媒体发布接口返回错误',
+  '应急喇叭': '应急喇叭控制链路中断',
+  '网站': '网站发布接口超时'
+};
+
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 function uid(prefix: string): string {
@@ -138,6 +169,7 @@ function initialDraft(): NoticeDraft {
     channels: ['短信', '广播', '社区大屏'],
     note: '发布范围覆盖滨海新区。',
     emergency: false,
+    receipts: [],
     languages: [
       {
         id: 'zh-CN', locale: 'zh-CN', name: '简体中文', title: '台风“海燕”橙色预警通知',
@@ -161,6 +193,7 @@ function initialDraft(): NoticeDraft {
     title: '台风“海燕”橙色预警及人员转移通知',
     scope: '滨海新区全区，重点为沿海街道',
     note: '增加沿海街道转移要求。',
+    receipts: [],
     languages: [
       {
         ...clone(first.languages[0]),
@@ -313,6 +346,10 @@ export class AppComponent implements OnInit {
   history: NoticeDraft[] = [];
   future: NoticeDraft[] = [];
 
+  simulatedOffline = false;
+  publishVersionId = '';
+  private readonly inFlight = new Set<string>();
+
   constructor(private readonly toastr: NbToastrService) {}
 
   ngOnInit(): void {
@@ -327,7 +364,22 @@ export class AppComponent implements OnInit {
     }
     this.compareBaseId = this.draft.versions.at(-2)?.id ?? '';
     this.compareTargetId = this.draft.versions.at(-1)?.id ?? '';
+    this.publishVersionId = this.draft.versions.at(-1)?.id ?? '';
     this.lastSavedAt = this.formatDateTime(this.draft.updatedAt);
+    if (this.isLocked) {
+      setTimeout(() => this.resumeSends(), 500);
+    }
+  }
+
+  @HostListener('window:online')
+  handleOnline(): void {
+    this.toastr.success('网络已恢复，继续处理未完成的渠道重试。', '断网恢复');
+    this.resumeSends();
+  }
+
+  @HostListener('window:offline')
+  handleOffline(): void {
+    this.toastr.warning('网络已断开，渠道发送将在恢复后自动重试。', '连接中断');
   }
 
   @HostListener('window:keydown', ['$event'])
@@ -455,6 +507,55 @@ export class AppComponent implements OnInit {
     return this.draft.reviews.some((review) => review.status !== 'approved');
   }
 
+  get isOnline(): boolean {
+    return (typeof navigator === 'undefined' ? true : navigator.onLine) && !this.simulatedOffline;
+  }
+
+  get currentVersion(): VersionSnapshot | undefined {
+    return this.draft.versions.at(-1);
+  }
+
+  get currentReceipts(): ChannelReceipt[] {
+    return this.currentVersion?.receipts ?? [];
+  }
+
+  get publishVersion(): VersionSnapshot | undefined {
+    return this.draft.versions.find((version) => version.id === this.publishVersionId) ?? this.currentVersion;
+  }
+
+  get publishReceipts(): ChannelReceipt[] {
+    return this.publishVersion?.receipts ?? [];
+  }
+
+  get canResend(): boolean {
+    return this.isLocked && this.publishVersion?.id === this.currentVersion?.id;
+  }
+
+  get receiptStats(): { total: number; success: number; sending: number; failed: number; stale: number; pending: number } {
+    const receipts = this.publishReceipts;
+    return {
+      total: receipts.length,
+      success: receipts.filter((receipt) => receipt.status === 'success').length,
+      sending: receipts.filter((receipt) => receipt.status === 'sending').length,
+      failed: receipts.filter((receipt) => receipt.status === 'failed').length,
+      stale: receipts.filter((receipt) => receipt.status === 'stale').length,
+      pending: receipts.filter((receipt) => receipt.status === 'pending').length
+    };
+  }
+
+  get hasRetryableReceipts(): boolean {
+    return this.publishReceipts.some((receipt) => receipt.status === 'failed' || receipt.status === 'stale' || receipt.status === 'pending');
+  }
+
+  get staleReceiptCount(): number {
+    const hash = this.contentFingerprint(this.draft).hash;
+    return this.currentReceipts.filter((receipt) => receipt.contentHash !== hash).length;
+  }
+
+  get contentChangedSinceLock(): boolean {
+    return this.staleReceiptCount > 0;
+  }
+
   isSentenceDiscussed(index: number): boolean {
     return this.activeDiscussions.some((discussion) => discussion.sentenceIndex === index && !discussion.resolved);
   }
@@ -570,11 +671,14 @@ export class AppComponent implements OnInit {
       this.activeView = 'checks';
       return;
     }
+    const prevVersion = this.draft.versions.at(-1);
+    const fingerprint = this.contentFingerprint(this.draft);
+    const receipts = this.draft.channels.map((channel) => this.buildReceipt(channel, prevVersion, fingerprint));
     const snapshot: VersionSnapshot = {
       id: uid('version'), label: '最终锁定版本', createdAt: new Date().toISOString(), version: this.nextVersion,
       title: this.draft.title, severity: this.draft.severity, scope: this.draft.scope, eventAt: this.draft.eventAt,
       effectiveAt: this.draft.effectiveAt, expiresAt: this.draft.expiresAt, channels: [...this.draft.channels],
-      languages: clone(this.draft.languages), note: '发布前检查通过并锁定。', emergency: false
+      languages: clone(this.draft.languages), note: '发布前检查通过并锁定。', emergency: false, receipts
     };
     this.commit((draft) => {
       draft.versions.push(snapshot);
@@ -584,7 +688,9 @@ export class AppComponent implements OnInit {
     });
     this.compareBaseId = this.draft.versions.at(-2)?.id ?? '';
     this.compareTargetId = this.draft.versions.at(-1)?.id ?? '';
-    this.toastr.success(`版本 ${snapshot.version} 已锁定。`, '最终版本已冻结');
+    this.publishVersionId = snapshot.id;
+    this.toastr.success(`版本 ${snapshot.version} 已锁定，开始向各渠道发送。`, '最终版本已冻结');
+    void this.resumeSends();
   }
 
   startEmergencyRevision(): void {
@@ -608,6 +714,144 @@ export class AppComponent implements OnInit {
     } else if (check.id === 'discussions') {
       this.activeView = 'review';
     }
+  }
+
+  resendChannel(channel: string): void {
+    if (!this.canResend) return;
+    void this.sendChannel(channel);
+  }
+
+  retryFailed(): void {
+    if (!this.canResend) return;
+    this.currentReceipts.forEach((receipt) => {
+      if (receipt.status === 'failed' || receipt.status === 'stale' || receipt.status === 'pending') {
+        void this.sendChannel(receipt.channel);
+      }
+    });
+  }
+
+  isInFlight(channel: string): boolean {
+    return this.inFlight.has(channel);
+  }
+
+  receiptStatusLabel(status: ReceiptStatus): string {
+    switch (status) {
+      case 'pending': return '待发送';
+      case 'sending': return '发送中';
+      case 'success': return '已送达';
+      case 'failed': return '发送失败';
+      case 'stale': return '待重新确认';
+    }
+  }
+
+  toggleSimulatedOffline(): void {
+    this.simulatedOffline = !this.simulatedOffline;
+    if (this.simulatedOffline) {
+      this.toastr.warning('已模拟断网，渠道发送将在恢复后自动重试。', '连接中断');
+    } else {
+      this.toastr.success('网络已恢复，继续处理未完成的渠道重试。', '断网恢复');
+      this.resumeSends();
+    }
+  }
+
+  private buildReceipt(
+    channel: string,
+    prevVersion: VersionSnapshot | undefined,
+    fingerprint: { hash: string; languageHashes: ChannelReceipt['languageHashes'] }
+  ): ChannelReceipt {
+    const prev = prevVersion?.receipts?.find((item) => item.channel === channel);
+    if (prev && prev.contentHash === fingerprint.hash) {
+      return { ...clone(prev), contentHash: fingerprint.hash, languageHashes: clone(fingerprint.languageHashes) };
+    }
+    if (prev) {
+      return {
+        channel, status: 'stale', attempts: prev.attempts,
+        contentHash: fingerprint.hash, languageHashes: clone(fingerprint.languageHashes)
+      };
+    }
+    return { channel, status: 'pending', attempts: 0, contentHash: fingerprint.hash, languageHashes: clone(fingerprint.languageHashes) };
+  }
+
+  private async sendChannel(channel: string): Promise<void> {
+    if (this.inFlight.has(channel)) return;
+    const receipt = this.currentReceipts.find((item) => item.channel === channel);
+    if (!receipt || receipt.status === 'success') return;
+    this.inFlight.add(channel);
+    this.silent((draft) => {
+      const target = this.findReceipt(draft, channel);
+      if (target) {
+        target.status = 'sending';
+        target.attempts += 1;
+        target.lastAttemptAt = new Date().toISOString();
+      }
+    });
+    try {
+      const result = await this.mockSend(channel);
+      this.silent((draft) => {
+        const target = this.findReceipt(draft, channel);
+        if (!target) return;
+        if (result.ok) {
+          target.status = 'success';
+          target.failureReason = undefined;
+          target.lastSuccessAt = new Date().toISOString();
+        } else {
+          target.status = 'failed';
+          target.failureReason = result.reason ?? '发送失败，原因未知';
+        }
+      });
+    } finally {
+      this.inFlight.delete(channel);
+    }
+  }
+
+  private resumeSends(): void {
+    if (!this.isLocked || !this.isOnline) return;
+    this.currentReceipts.forEach((receipt) => {
+      if (receipt.status === 'failed' || receipt.status === 'stale' || receipt.status === 'pending') {
+        if (!this.inFlight.has(receipt.channel)) void this.sendChannel(receipt.channel);
+      }
+    });
+  }
+
+  private findReceipt(draft: NoticeDraft, channel: string): ChannelReceipt | undefined {
+    return draft.versions.at(-1)?.receipts?.find((item) => item.channel === channel);
+  }
+
+  private async mockSend(channel: string): Promise<{ ok: boolean; reason?: string }> {
+    await this.delay(350 + Math.random() * 850);
+    if (!this.isOnline) {
+      return { ok: false, reason: '网络连接已断开，等待恢复后自动重试' };
+    }
+    const rate = CHANNEL_SUCCESS_RATE[channel] ?? 0.8;
+    if (Math.random() < rate) return { ok: true };
+    return { ok: false, reason: CHANNEL_FAILURE_REASON[channel] ?? '发送失败，原因未知' };
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private contentFingerprint(draft: NoticeDraft): { hash: string; languageHashes: ChannelReceipt['languageHashes'] } {
+    const languageHashes = draft.languages.map((language) => ({
+      languageId: language.id,
+      locale: language.locale,
+      hash: this.cyrb53(`${language.id}|${language.title}|${language.body}`)
+    }));
+    const hash = this.cyrb53(`${draft.title}::${languageHashes.map((item) => `${item.languageId}:${item.hash}`).join('|')}`);
+    return { hash, languageHashes };
+  }
+
+  private cyrb53(input: string, seed = 0): string {
+    let h1 = 0xdeadbeef ^ seed;
+    let h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < input.length; i++) {
+      const ch = input.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
   }
 
   undo(): void {
@@ -659,6 +903,14 @@ export class AppComponent implements OnInit {
     this.persist();
   }
 
+  private silent(mutator: (draft: NoticeDraft) => void): void {
+    const next = clone(this.draft);
+    mutator(next);
+    next.updatedAt = new Date().toISOString();
+    this.draft = next;
+    this.persist();
+  }
+
   private persist(): void {
     this.lastSavedAt = this.formatDateTime(new Date().toISOString());
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...this.draft, updatedAt: new Date().toISOString() }));
@@ -669,6 +921,7 @@ export class AppComponent implements OnInit {
     value.discussions ??= [];
     value.reviews ??= [];
     value.requiredLocales ??= ['zh-CN'];
+    value.versions.forEach((version) => { version.receipts ??= []; });
     return value;
   }
 

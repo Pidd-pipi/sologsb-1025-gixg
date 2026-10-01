@@ -26,6 +26,7 @@
         <div><strong>{{ draft.channels.length }}</strong><span>发布渠道</span></div>
         <div><strong class="danger-text">{{ blockingChecks.length }}</strong><span>阻断问题</span></div>
         <div><strong class="warning-text">{{ warningCount }}</strong><span>待确认提醒</span></div>
+        <div *ngIf="isLocked"><strong [class.danger-text]="receiptStats.failed || receiptStats.stale">{{ receiptStats.success }}/{{ receiptStats.total }}</strong><span>渠道已送达</span></div>
       </div>
     </section>
 
@@ -41,6 +42,9 @@
       </button>
       <button [class.active]="activeView === 'versions'" (click)="activeView = 'versions'">
         <span>04</span><strong>锁定与比较</strong><small>冻结、紧急修订、差异</small>
+      </button>
+      <button [class.active]="activeView === 'publish'" (click)="activeView = 'publish'">
+        <span>05</span><strong>发布回执</strong><small>渠道送达、失败重发</small>
       </button>
     </nav>
 
@@ -290,6 +294,78 @@
           </nb-card>
         </div>
       </div>
+    </section>
+
+    <section *ngIf="activeView === 'publish'" class="view-section">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">发布回执</span>
+          <h2>渠道送达回执与失败重发</h2>
+          <p>每次锁定记录各渠道的尝试次数、最后状态和失败原因；失败仅重发该渠道，成功回执不受影响。</p>
+        </div>
+        <div class="version-actions">
+          <button nbButton [status]="isOnline ? 'basic' : 'warning'" (click)="toggleSimulatedOffline()">
+            {{ isOnline ? '模拟断网' : '恢复网络' }}
+          </button>
+          <button nbButton status="primary" (click)="retryFailed()" [disabled]="!canResend || !hasRetryableReceipts">全部重发失败渠道</button>
+        </div>
+      </div>
+
+      <nb-alert *ngIf="!isOnline" status="warning" class="network-alert">
+        <strong>网络已断开</strong> — 渠道发送暂停，失败请求已记录原因；恢复后将自动继续未完成的重试。
+      </nb-alert>
+      <nb-alert *ngIf="contentChangedSinceLock" status="danger" class="network-alert">
+        <strong>文案已改动</strong> — 有 {{ staleReceiptCount }} 个渠道回执引用旧稿内容，需重新锁定后再确认送达。
+        <button nbButton size="tiny" status="danger" (click)="activeView = 'versions'">前往重新锁定</button>
+      </nb-alert>
+
+      <div class="receipt-summary">
+        <div><strong>{{ receiptStats.success }}</strong><span>已送达</span></div>
+        <div><strong>{{ receiptStats.sending }}</strong><span>发送中</span></div>
+        <div><strong>{{ receiptStats.failed }}</strong><span>失败</span></div>
+        <div><strong>{{ receiptStats.stale }}</strong><span>待重新确认</span></div>
+        <div><strong>{{ receiptStats.total }}</strong><span>渠道总数</span></div>
+      </div>
+
+      <nb-card class="panel">
+        <nb-card-header>
+          <div>
+            <span class="section-kicker">锁定版本</span>
+            <h3>{{ publishVersion?.version }} · {{ publishVersion?.label }}</h3>
+          </div>
+          <nb-select [ngModel]="publishVersionId" (ngModelChange)="publishVersionId = $event" size="small">
+            <nb-option *ngFor="let version of draft.versions" [value]="version.id">{{ version.version }} · {{ version.label }}</nb-option>
+          </nb-select>
+        </nb-card-header>
+        <nb-card-body>
+          <div class="receipt-list">
+            <article *ngFor="let receipt of publishReceipts" class="receipt-card" [class]="receipt.status">
+              <div class="receipt-main">
+                <div class="receipt-channel">{{ receipt.channel }}</div>
+                <div class="receipt-status">
+                  <span class="receipt-badge" [class]="receipt.status">{{ receiptStatusLabel(receipt.status) }}</span>
+                  <span class="receipt-attempts">尝试 {{ receipt.attempts }} 次</span>
+                </div>
+                <p class="receipt-reason" *ngIf="receipt.status === 'failed'">
+                  <strong>失败原因：</strong>{{ receipt.failureReason }}
+                </p>
+                <p class="receipt-reason stale" *ngIf="receipt.status === 'stale'">
+                  <strong>待重新确认：</strong>文案已更新，该回执引用旧稿，需重新发送确认。
+                </p>
+                <p class="receipt-time" *ngIf="receipt.lastAttemptAt">
+                  最近尝试 {{ formatDateTime(receipt.lastAttemptAt) }}<span *ngIf="receipt.lastSuccessAt"> · 送达 {{ formatDateTime(receipt.lastSuccessAt) }}</span>
+                </p>
+              </div>
+              <button nbButton size="small" [status]="receipt.status === 'success' ? 'basic' : 'primary'"
+                      [disabled]="!canResend || receipt.status === 'success' || isInFlight(receipt.channel)"
+                      (click)="resendChannel(receipt.channel)">
+                {{ isInFlight(receipt.channel) ? '发送中…' : receipt.status === 'success' ? '已送达' : '重发该渠道' }}
+              </button>
+            </article>
+            <p *ngIf="!publishReceipts.length" class="empty-copy">该版本没有渠道回执。</p>
+          </div>
+        </nb-card-body>
+      </nb-card>
     </section>
   </nb-layout-column>
 </nb-layout>
