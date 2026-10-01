@@ -163,6 +163,52 @@ blockquote { margin: 0 0 15px; padding: 15px 18px; border-left: 4px solid #ef835
 .version-summary dl { margin: 0; display: grid; grid-template-columns: auto 1fr; align-content: start; gap: 5px 10px; font-size: 11px; }
 .version-summary dt { color: #89999d; }
 .version-summary dd { margin: 0; color: #4d646c; text-align: right; }
+
+/* 渠道回执 */
+.delivery-toolbar { display: flex; align-items: center; gap: 12px; }
+.offline-toggle nb-checkbox { margin: 0; }
+.network-state { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; color: #21795c; background: #e1f5ec; font-size: 11px; font-weight: 700; }
+.network-state.offline { color: #b84c38; background: #ffebe6; }
+.net-dot { width: 7px; height: 7px; border-radius: 50%; background: #2d9572; }
+.network-state.offline .net-dot { background: #d05a44; }
+.delivery-summary { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.ds-item { min-width: 64px; padding: 10px 12px; text-align: center; border-radius: 12px; background: #f3f7f7; }
+.ds-item strong { display: block; font-size: 22px; color: #33505a; }
+.ds-item span { font-size: 11px; color: #7e9096; }
+.ds-item.ok strong { color: #21795c; }
+.ds-item.bad strong { color: #c95740; }
+.ds-item.wait strong { color: #c77a24; }
+.ds-item.sending strong { color: #176a8a; }
+.ds-meta { margin-left: auto; display: grid; gap: 4px; justify-items: end; color: #839499; font-size: 11px; }
+.delivery-alert { margin-bottom: 12px; }
+.receipt-list { display: grid; gap: 10px; }
+.receipt-row { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 14px 16px; border: 1px solid #e2eaea; border-left: 5px solid #c2d2d4; border-radius: 13px; background: #fafcfc; }
+.receipt-row.success { border-left-color: #2d9572; background: #f4fbf8; }
+.receipt-row.failed { border-left-color: #cc5b46; background: #fff7f5; }
+.receipt-row.sending { border-left-color: #3d87a5; background: #f2f9fc; }
+.receipt-row.stale, .receipt-row.stale-row { border-left-color: #9a7bb3; background: #f8f5fb; opacity: .82; }
+.receipt-main header { display: flex; align-items: center; gap: 10px; }
+.receipt-main header strong { color: #24424c; font-size: 14px; }
+.receipt-badge { padding: 3px 9px; border-radius: 999px; background: #e6eeee; color: #5d747c; font-size: 10px; font-weight: 700; }
+.success .receipt-badge { color: #21795c; background: #dcf3e8; }
+.failed .receipt-badge { color: #b84c38; background: #ffe1db; }
+.sending .receipt-badge { color: #176a8a; background: #e0f0f8; }
+.stale .receipt-badge, .stale-row .receipt-badge { color: #6c4d8d; background: #ece3f6; }
+.receipt-meta { display: flex; gap: 22px; margin: 9px 0 0; }
+.receipt-meta dt { color: #8a9aa0; font-size: 10px; }
+.receipt-meta dd { margin: 2px 0 0; color: #3f5860; font-size: 12px; font-weight: 700; }
+.receipt-reason { margin: 8px 0 0; color: #7a5b50; font-size: 12px; line-height: 1.6; }
+.receipt-reason b { color: #c0563f; margin-right: 4px; }
+.stale-row .receipt-reason b { color: #6c4d8d; }
+.receipt-action { display: grid; justify-items: end; gap: 6px; }
+.receipt-locked { color: #2d9572; font-size: 12px; font-weight: 700; }
+.version-receipt { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.vr-chip { padding: 2px 8px; border-radius: 999px; background: #e6eeee; color: #5d747c; font-size: 10px; }
+.vr-chip i { font-style: normal; opacity: .7; }
+.vr-chip.success { color: #21795c; background: #dcf3e8; }
+.vr-chip.failed { color: #b84c38; background: #ffe1db; }
+.vr-chip.sending { color: #176a8a; background: #e0f0f8; }
+.vr-chip.stale { color: #6c4d8d; background: #ece3f6; }
 @media (max-width: 1100px) {
   .view-grid, .check-layout, .review-grid, .version-layout { grid-template-columns: 1fr; }
   .side-column { grid-template-columns: repeat(3, 1fr); }
@@ -177,4 +223,9 @@ blockquote { margin: 0 0 15px; padding: 15px 18px; border-left: 4px solid #ef835
   .strip-metrics div { min-width: 0; padding: 8px; }
   .header-actions { justify-content: flex-start; }
   .discussion-compose, .version-summary article { grid-template-columns: 1fr; }
+  .delivery-summary { flex-wrap: wrap; }
+  .ds-meta { margin-left: 0; justify-items: start; flex-basis: 100%; }
+  .receipt-row { grid-template-columns: 1fr; }
+  .receipt-action { justify-items: start; }
+  .delivery-toolbar { flex-wrap: wrap; }
 }

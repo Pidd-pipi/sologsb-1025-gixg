@@ -150,6 +150,7 @@
             <div [class.done]="blockingChecks.length === 0"><span>2</span><p><strong>发布检查</strong>必须清除阻断项</p></div>
             <div [class.done]="allReviewsApproved"><span>3</span><p><strong>角色确认</strong>编辑、法务、翻译、发布人</p></div>
             <div [class.done]="isLocked"><span>4</span><p><strong>冻结发布</strong>生成不可变快照</p></div>
+            <div [class.done]="allChannelsConfirmed"><span>5</span><p><strong>渠道回执</strong>短信、广播、大屏逐渠道确认</p></div>
           </nb-card-body>
         </nb-card>
       </aside>
@@ -258,6 +259,76 @@
           </nb-card>
         </aside>
         <div class="main-column">
+          <nb-card class="panel delivery-card" *ngIf="latestBatch as batch">
+            <nb-card-header>
+              <div>
+                <span class="section-kicker">渠道回执</span>
+                <h3>版本 {{ batch.version }} · 各渠道发送确认</h3>
+              </div>
+              <div class="delivery-toolbar">
+                <label class="offline-toggle">
+                  <nb-checkbox [checked]="simulateOffline" (checkedChange)="toggleOfflineSimulation($event)">模拟断网</nb-checkbox>
+                </label>
+                <span class="network-state" [class.offline]="!isOnline">
+                  <span class="net-dot"></span>{{ isOnline ? '网络正常' : '断网中' }}
+                </span>
+                <button nbButton size="tiny" status="warning"
+                        [disabled]="batchCounts(batch).failed === 0"
+                        (click)="resendFailedChannels(batch)">只重发失败渠道</button>
+              </div>
+            </nb-card-header>
+            <nb-card-body>
+              <div class="delivery-summary">
+                <div class="ds-item ok"><strong>{{ batchCounts(batch).success }}</strong><span>成功</span></div>
+                <div class="ds-item bad"><strong>{{ batchCounts(batch).failed }}</strong><span>失败</span></div>
+                <div class="ds-item wait"><strong>{{ batchCounts(batch).pending }}</strong><span>待续发</span></div>
+                <div class="ds-item sending"><strong>{{ batchCounts(batch).sending }}</strong><span>发送中</span></div>
+                <div class="ds-meta">
+                  <span>锁定于 {{ formatDateTime(batch.lockedAt) }}</span>
+                  <span>每渠道独立计次，成功后不再重发</span>
+                </div>
+              </div>
+
+              <nb-alert status="success" *ngIf="allChannelsConfirmed" class="delivery-alert">
+                全部 {{ batch.receipts.length }} 个渠道均已收到成功回执，本版发布完成。
+              </nb-alert>
+              <nb-alert status="warning" *ngIf="!isOnline && !allChannelsConfirmed" class="delivery-alert">
+                当前断网：未完成渠道已进入待续发队列，不增加尝试次数；网络恢复后自动续发，同一渠道结果回来前不会重复发送。
+              </nb-alert>
+              <nb-alert status="danger" *ngIf="hasStaleReceipts(batch)" class="delivery-alert">
+                {{ batch.receipts[0].staleReason }}
+              </nb-alert>
+
+              <div class="receipt-list">
+                <article class="receipt-row" *ngFor="let receipt of batch.receipts"
+                         [class]="receipt.stale ? 'stale' : receipt.status"
+                         [class.stale-row]="receipt.stale">
+                  <div class="receipt-main">
+                    <header>
+                      <strong>{{ receipt.channel }}</strong>
+                      <span class="receipt-badge">{{ receiptStatusLabel(receipt) }}</span>
+                    </header>
+                    <dl class="receipt-meta">
+                      <div><dt>尝试次数</dt><dd>{{ receipt.attempts }}</dd></div>
+                      <div><dt>最后尝试</dt><dd>{{ receipt.lastAttemptAt ? formatDateTime(receipt.lastAttemptAt) : '—' }}</dd></div>
+                      <div><dt>成功回执</dt><dd>{{ receipt.confirmedAt ? formatDateTime(receipt.confirmedAt) : '—' }}</dd></div>
+                    </dl>
+                    <p class="receipt-reason" *ngIf="receipt.failureReason">
+                      <b>{{ receipt.errorKind === 'network' || receipt.errorKind === 'interrupted' ? '待续发原因' : '失败原因' }}</b>
+                      {{ receipt.failureReason }}
+                    </p>
+                  </div>
+                  <div class="receipt-action">
+                    <button nbButton size="small" status="danger"
+                            *ngIf="canResendReceipt(receipt)"
+                            (click)="resendChannel(receipt.channel)">只重发该渠道</button>
+                    <span class="receipt-locked" *ngIf="receipt.status === 'success'">回执已锁定 ✓</span>
+                  </div>
+                </article>
+              </div>
+            </nb-card-body>
+          </nb-card>
+
           <nb-card class="panel">
             <nb-card-header class="diff-header">
               <div><span class="section-kicker">文本比较</span><h3>两版正文差异</h3></div>
@@ -283,7 +354,15 @@
             <nb-card-header><div><span class="section-kicker">发布记录</span><h3>版本摘要</h3></div></nb-card-header>
             <nb-card-body class="version-summary">
               <article *ngFor="let version of draft.versions">
-                <div><span>{{ version.version }}</span><h3>{{ version.title }}</h3><p>{{ version.note }}</p></div>
+                <div><span>{{ version.version }}</span><h3>{{ version.title }}</h3><p>{{ version.note }}</p>
+                  <div class="version-receipt" *ngIf="batchForVersion(version.id) as vbatch">
+                    <ng-container *ngFor="let receipt of vbatch.receipts">
+                      <span class="vr-chip" [class]="receipt.stale ? 'stale' : receipt.status">
+                        {{ receipt.channel }} · {{ receiptStatusLabel(receipt) }}<i *ngIf="receipt.attempts > 1"> ×{{ receipt.attempts }}</i>
+                      </span>
+                    </ng-container>
+                  </div>
+                </div>
                 <dl><dt>严重程度</dt><dd>{{ version.severity }}</dd><dt>失效</dt><dd>{{ formatDateTime(version.expiresAt) }}</dd></dl>
               </article>
             </nb-card-body>
